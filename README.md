@@ -62,8 +62,29 @@ awk '/^>/{p = ($0 ~ /^>mml/)} p{print}' mature.fa > mature_mml.fa
 grep -c '^>' mature.fa 
 48885
 
+grep -c '^>' mature_mml.fa
+912
+
 grep '^>' mature_mml.fa | head -n 50
 >mml-miR-200c-5p MIMAT0026560 Macaca mulatta miR-200c-5p
 >mml-miR-200c-3p MIMAT0002195 Macaca mulatta miR-200c-3p
+
+### Convert Us to Ts and doublecheck number of miRNAs before and after conversion
+awk '/^>/{print; next} { gsub(/[Uu]/, "T"); print }' mature_mml.fa > mature_mmlTs.fa
+
+grep -c '^>' mature_mmlTs.fa 
+912
+
+head mature_mmlTs.fa                                                                
+>mml-miR-200c-5p MIMAT0026560 Macaca mulatta miR-200c-5p
+CGTCTTACCCAGCAGTGTTTGG
+>mml-miR-200c-3p MIMAT0002195 Macaca mulatta miR-200c-3p
+AATACTGCCGGGTAATGATGGA
+
+
+### Indexing the Rhesus macaque + U-->T converted .fa files
+bowtie-build mature_mmlTs.fa mature_mmlTs
+Settings:
+  Output files: "mature_mmlTs.*.ebwt"
 
 
