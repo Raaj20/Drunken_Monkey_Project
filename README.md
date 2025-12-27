@@ -29,6 +29,7 @@ conda install -c bioconda fastqc
 conda install -c bioconda bbmap
 conda install -c bioconda bowtie
 conda install -c bioconda samtools
+conda install -c bioconda multiqc
 
  % fastqc --version                
 FastQC v0.12.1
@@ -45,6 +46,9 @@ Built on Mac-1733801069421.local
 % samtools --version
 samtools 1.23
 Using htslib 1.23
+
+% multiqc --version                                      
+multiqc, version 1.33
 
 # Indexing and setting up Directories
 head mature.fa 
@@ -86,5 +90,80 @@ AATACTGCCGGGTAATGATGGA
 bowtie-build mature_mmlTs.fa mature_mmlTs
 Settings:
   Output files: "mature_mmlTs.*.ebwt"
+
+## Make Directories
+INPUTDIR="/Users/viraa/Drunken_Monkey_R/Unzipped_Files"
+OUTPUTDIR="/Users/viraa/Drunken_Monkey_R/Analysis"
+INDEX="/Users/viraa/Drunken_Monkey_R/Index"
+
+mkdir $INPUTDIR/QCReports 
+
+## Pre-trimmed QC
+for file in "$INPUTDIR"/*.fastq; do   
+    echo "Running FastQC on: $file"
+    fastqc -o "$QCREPORT" -t 16 "$file"
+done
+
+### Multi QC
+cd /Users/viraa/Drunken_Monkey_R/Unzipped_Files/QCReports
+multiqc . -o ./MultiQC_Report
+
+## Adapter Trimming
+"/Users/viraa/Drunken_Monkey_R/Unzipped_Files"
+OUTPUTDIR="/Users/viraa/Drunken_Monkey_R/Analysis/trimmed_reads"
+
+mkdir -p "$OUTPUTDIR"
+
+for file in "$INPUTDIR"/*.fastq; do
+    i=$(basename "$file" .fastq)
+
+    echo "Trimming adapter from $i..."
+
+    bbduk.sh -Xmx27g \
+        in="$file" \
+        out="$OUTPUTDIR/${i}-Trimmed.fastq" \
+        literal=TGGAATTCTCGGGTGCCAAGGAACTCCAGTCAC \
+        ktrim=r k=21 mink=11 hdist=2
+done
+
+
+## Bowtie Alignment
+5' – TGGAATTCTCGGGTGCCAAGGAACTCCAGTCAC – 3' 
+
+
+
+OUTPUTDIR="/Users/viraa/Drunken_Monkey_R/Analysis/trimmed_reads"
+INDEX="/Users/viraa/Drunken_Monkey_R/Index/mature_mmlTs"
+COUNTDIR="$OUTPUTDIR/maturemiRNAcounts"
+
+# --- Create output folder for counts ---
+mkdir -p "$COUNTDIR"
+
+# --- Loop through all trimmed FASTQ files ---
+for file in "$OUTPUTDIR"/*-Trimmed.fastq; do
+    i=$(basename "$file" -Trimmed.fastq)
+
+    echo "Running Bowtie on $i..."
+
+    bowtie -v 1 -k 1 -m 1 --best --strata --threads 16 -S\
+        "$INDEX" \
+        -q "$file" \
+        --un "$OUTPUTDIR/${i}-unaligned.fastq" \
+        -S "$OUTPUTDIR/${i}.sam" \
+        2> "$OUTPUTDIR/${i}.log"
+
+    echo "Converting SAM to BAM and indexing..."
+
+    samtools sort "$OUTPUTDIR/${i}.sam" -o "$OUTPUTDIR/${i}.bam"
+    samtools index "$OUTPUTDIR/${i}.bam"
+    rm "$OUTPUTDIR/${i}.sam"
+
+    echo "Counting mapped reads for $i..."
+
+    samtools idxstats "$OUTPUTDIR/${i}.bam" | cut -f1,3 | \
+        sed "1s/^/miRNA\t${i}-miRNAcount\n/" > "$COUNTDIR/${i}-counts.txt"
+
+    echo "Done with $i."
+done
 
 
