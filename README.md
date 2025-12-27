@@ -166,4 +166,12 @@ for file in "$OUTPUTDIR"/*-Trimmed.fastq; do
     echo "Done with $i."
 done
 
+## Post-trimmed QC
+for file in "$OUTPUTDIR"/*Trimmed.fastq; do   
+    echo "Running FastQC on: $file"
+    fastqc -o "$QCREPORT" -t 16 "$file"
+done
+
+cd /Users/viraa/Drunken_Monkey_R/Analysis/trimmed_reads
+multiqc . -o ./MultiQC_Report
 
