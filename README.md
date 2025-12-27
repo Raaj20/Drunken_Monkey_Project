@@ -127,6 +127,29 @@ for file in "$INPUTDIR"/*.fastq; do
 done
 
 
+## ALTERNATIVE Adapter Trimming
+**INPUTDIR="/Users/viraa/Drunken_Monkey_R/Unzipped_Files"
+OUTPUTDIR="/Users/viraa/Drunken_Monkey_R/Analysis/trimmed_reads"
+
+mkdir -p "$OUTPUTDIR"
+
+for file in "$INPUTDIR"/*.fastq; do
+    i=$(basename "$file" .fastq)
+
+    echo "Trimming adapter from $i..."
+
+bbduk.sh -Xmx27g \
+in="$INPUTDIR/$i.fastq.gz" \
+out="$OUTPUTDIR/$i/${i}-Trimmed.fastq" \
+literal=TGGAATTCTCGGGTGCCAAGGAACTCCAGTCAC,TGGAATTCTCGGGTGCCAAGG \
+ktrim=r k=21 mink=9 hdist=1 \
+qtrim=r trimq=10 \
+minlength=16
+done**
+
+
+
+
 ## Bowtie Alignment
 5' – TGGAATTCTCGGGTGCCAAGGAACTCCAGTCAC – 3' 
 
