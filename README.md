@@ -98,6 +98,10 @@ INDEX="/Users/viraa/Drunken_Monkey_R/Index"
 
 mkdir $INPUTDIR/QCReports 
 
+## Unzip Files
+gunzip -k /Users/viraa/Drunken_Monkey_R/Unzipped_Files/*.fastq.gz
+
+
 ## Pre-trimmed QC
 for file in "$INPUTDIR"/*.fastq; do   
     echo "Running FastQC on: $file"
@@ -138,13 +142,7 @@ for file in "$INPUTDIR"/*.fastq; do
 
     echo "Trimming adapter from $i..."
 
-bbduk.sh -Xmx27g \
-in="$INPUTDIR/$i.fastq.gz" \
-out="$OUTPUTDIR/$i/${i}-Trimmed.fastq" \
-literal=TGGAATTCTCGGGTGCCAAGGAACTCCAGTCAC,TGGAATTCTCGGGTGCCAAGG \
-ktrim=r k=21 mink=9 hdist=1 \
-qtrim=r trimq=10 \
-minlength=16
+bbduk.sh -Xmx27g \        in="$file" \        out="$OUTPUTDIR/${i}-Trimmed.fastq" \        literal=TGGAATTCTCGGGTGCCAAGGAACTCCAGTCAC,TGGAATTCTCGGGTGCCAAGG \        ktrim=r k=21 mink=9 hdist=1 \        qtrim=r trimq=10 \        minlength=16
 done**
 
 
