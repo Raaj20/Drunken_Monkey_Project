@@ -109,8 +109,8 @@ for file in "$INPUTDIR"/*.fastq; do
 done
 
 ### Multi QC
-cd /Users/viraa/Drunken_Monkey_R/Unzipped_Files/QCReports
-multiqc . -o ./MultiQC_Report
+cd /Users/viraa/Drunken_Monkey_R/Unzipped_Files/MultiQC_Report
+multiqc . -o . 
 
 ## Adapter Trimming
 "/Users/viraa/Drunken_Monkey_R/Unzipped_Files"
@@ -193,6 +193,6 @@ for file in "$OUTPUTDIR"/*Trimmed.fastq; do
     fastqc -o "$QCREPORT" -t 16 "$file"
 done
 
-cd /Users/viraa/Drunken_Monkey_R/Analysis/trimmed_reads
-multiqc . -o ./MultiQC_Report
+cd /Users/viraa/Drunken_Monkey_R/Analysis/trimmed_reads/MultiQC_Report
+multiqc . -o .
 
