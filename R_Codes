@@ -1,0 +1,115 @@
+
+# Choose your path and delimiter
+path <- "/Users/viraa/Drunken_Monkey_R/Analysis/trimmed_reads/maturemiRNAcounts/merged_miRNA_counts.csv"   
+sep  <- ","                   
+
+# Read
+df <- read.csv(path, sep = sep, header = TRUE, check.names = FALSE, stringsAsFactors = FALSE)
+
+# First column should be miRNA names
+colnames(df)[1] <- "miRNA"
+
+# Remove a junk row like "*" if present
+df <- df[df$miRNA != "*", ]
+
+# Set rownames to miRNA and drop the name column
+rownames(df) <- df$miRNA
+df <- df[, -1, drop = FALSE]
+
+# Convert to integer matrix (counts must be integer for edgeR/DESeq2)
+counts <- as.matrix(df)
+mode(counts) <- "numeric"
+counts[is.na(counts)] <- 0
+counts <- round(counts)
+storage.mode(counts) <- "integer"
+
+# Quick sanity checks
+dim(counts)          # genes x samples
+head(rownames(counts))
+head(colnames(counts))
+summary(colSums(counts))  # library sizes
+
+
+# Extract components from sample names using regex or split
+samp <- colnames(counts)
+
+# Split on underscore: "10360", "B", "S33"
+parts <- do.call(rbind, strsplit(samp, "_"))
+
+# Build colData
+colData <- data.frame(
+  Sample   = samp,
+  Subject  = parts[, 1],
+  TP_letter= parts[, 2],
+  RunID    = parts[, 3],
+  stringsAsFactors = FALSE
+)
+
+# Map TP_letter to explicit factor levels
+colData$Timepoint <- ifelse(colData$TP_letter == "B", "pre", 
+                            ifelse(colData$TP_letter == "P", "post", NA))
+
+# Factorize with desired order: pre then post
+colData$Subject   <- factor(colData$Subject)
+colData$Timepoint <- factor(colData$Timepoint, levels = c("pre", "post"))
+colData$RunID     <- factor(colData$RunID)
+
+# Inspect
+head(colData)
+table(colData$Timepoint)
+length(unique(colData$Subject))
+
+
+meta <- read.csv("subject_sex.csv", stringsAsFactors = FALSE)
+meta$Subject <- as.character(meta$Subject)
+meta$Sex     <- factor(meta$Sex, levels = c("female", "male"))  # choose your reference
+
+# Join to colData by Subject
+colData <- merge(colData, meta, by = "Subject", all.x = TRUE, sort = FALSE)
+
+# Reorder to match counts columns (merge may reorder)
+colData <- colData[match(colnames(counts), colData$Sample), ]
+
+# Sanity checks
+stopifnot(all(colData$Sample == colnames(counts)))
+table(colData$Sex, useNA = "ifany")
+
+library(edgeR)
+
+y <- DGEList(counts = counts)
+y <- calcNormFactors(y, method = "TMM")
+
+library(limma)
+library(variancePartition)
+
+# Fixed-effects design for voom weights (no random terms here)
+X <- model.matrix(~ Sex + Timepoint + Sex:Timepoint, data = colData)
+
+v <- voom(y, X, plot = FALSE)
+
+# Mixed-effects formula including random intercept for Subject
+form <- ~ Sex + Timepoint + Sex:Timepoint + (1 | Subject)
+
+fit <- dream(v, form, colData)
+fit <- eBayes(fit)
+
+# Main pre vs post effect (adjusted for Sex)
+res_prepost <- topTable(fit, coef = "Timepointpost", number = Inf)
+
+# Interaction: does pre–post differ by Sex?
+# NOTE: Adjust level names if your Sex factor uses "male"/"female" or other labels
+res_interaction <- topTable(fit, coef = "Sexmale:Timepointpost", number = Inf)
+
+# Optional: main effect of Sex (baseline difference at reference timepoint)
+res_sex <- topTable(fit, coef = "Sexmale", number = Inf)
+
+res_prepost_sig <- subset(as.data.frame(res_prepost), adj.P.Val < 0.05)
+res_interaction_sig <- subset(as.data.frame(res_interaction), adj.P.Val < 0.05)
+res_sex_sig <- subset(as.data.frame(res_sex), adj.P.Val < 0.05)
+
+
+# Save results
+write.csv(res_prepost_sig,      "results_pre_vs_post.csv", row.names = TRUE)
+write.csv(res_interaction_sig,  "results_interaction_Sex_by_Timepoint.csv", row.names = TRUE)
+write.csv(res_sex_sig,          "results_main_effect_Sex.csv", row.names = TRUE)
+
