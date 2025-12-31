@@ -1,28 +1,105 @@
 
-# counts: matrix genes x samples
-# colData: data.frame with Sample, Subject, Timepoint, Sex, etc.
+# Install if needed:
+# install.packages("BiocManager")
+# BiocManager::install(c("DESeq2", "apeglm"))
 
-dds <- DESeqDataSetFromMatrix(countData = counts,
-                              colData   = colData,
-                              design    = ~ Timepoint)  # design not used for PCA, just needed
+library(DESeq2)
+library(readr)
+library(dplyr)
 
-# Variance Stabilizing Transform
-vsd <- vst(dds, blind = TRUE)         # blind=TRUE ignores design; good for QC/PCA
-mat <- assay(vsd)
+# --- Paths ---
+count_dir <- "/Users/viraa/Drunken_Monkey_R/Analysis/trimmed_reads/maturemiRNAcounts"
+counts_file <- file.path(count_dir, "merged_miRNA_counts.filtered.csv")
+metadata_file <- file.path(count_dir, "sample_metadata.csv")  # <- create if not present
 
-# PCA (base R)
-pca <- prcomp(t(mat), scale. = TRUE)
-scores <- as.data.frame(pca$x)
-scores$Timepoint <- colData$Timepoint
-scores$Subject   <- colData$Subject
-scores$Sex       <- colData$Sex
+# --- Load counts ---
+counts_df <- read_csv(counts_file)
 
-# Plot with ggplot2
-library(ggplot2)
-ggplot(scores, aes(PC1, PC2, color = Timepoint, shape = Sex, label = Subject)) +
-  geom_point(size = 3) +
-  stat_ellipse() +
-  labs(title = "PCA of samples (VST)",
-       x = paste0("PC1 (", round(100*summary(pca)$importance[2,1], 1), "%)"),
-       y = paste0("PC2 (", round(100*summary(pca)$importance[2,2], 1), "%)")) +
-  theme_bw()
+# Row names as miRNA, ensure matrix of counts
+stopifnot("miRNA" %in% names(counts_df))
+miRNA_ids <- counts_df$miRNA
+counts_mat <- counts_df %>%
+  select(-miRNA) %>%
+  as.data.frame()
+
+# Coerce to integer (DESeq2 requires integers)
+counts_mat[] <- lapply(counts_mat, function(x) {
+  # handle numeric/character
+  x <- suppressWarnings(as.numeric(x))
+  if (any(is.na(x))) stop("Some count columns contain non-numeric values.")
+  as.integer(round(x))
+})
+
+rownames(counts_mat) <- miRNA_ids
+
+# --- Load metadata ---
+coldata <- read_csv(metadata_file)
+
+# Expect columns: sample, condition, subject
+required_cols <- c("sample", "condition", "subject")
+if (!all(required_cols %in% names(coldata))) {
+  stop("Metadata must contain columns: sample, condition, subject")
+}
+
+# Ensure sample order matches count columns
+if (!setequal(colnames(counts_mat), coldata$sample)) {
+  stop("Mismatch between count columns and metadata sample names.")
+}
+coldata <- coldata %>% slice(match(colnames(counts_mat), sample))
+
+# Factor levels: make 'baseline' the reference
+coldata <- coldata %>%
+  mutate(
+    condition = factor(condition, levels = c("baseline", "post")),
+    subject = factor(subject)
+  )
+
+# --- Build DESeq2 object with paired design ---
+dds <- DESeqDataSetFromMatrix(
+  countData = counts_mat,
+  colData = coldata,
+  design = ~ subject + condition
+)
+
+# Optional: filter very lowly expressed miRNAs (e.g., keep rows with at least 10 counts total)
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep, ]
+
+# Run DE analysis
+dds <- DESeq(dds)
+
+# Contrast: post vs baseline
+res <- results(dds, contrast = c("condition", "post", "baseline"))
+# Shrink log2FC for better interpretability (apeglm)
+res_shrunk <- lfcShrink(dds, coef = "condition_post_vs_baseline", type = "apeglm")
+
+# Order by adjusted p-value
+res_tbl <- res_shrunk %>%
+  as.data.frame() %>%
+  mutate(miRNA = rownames(res_shrunk)) %>%
+  relocate(miRNA) %>%
+  arrange(padj)
+
+# Save results
+out_res <- file.path(count_dir, "DESeq2_paired_post_vs_baseline_results.csv")
+write_csv(res_tbl, out_res)
+cat("✅ DESeq2 results saved:", out_res, "\n")
+
+# --- Quick summary ---
+summary(res)
+
+# --- Optional: normalized counts and variance-stabilized data ---
+norm_counts <- counts(dds, normalized = TRUE) %>%
+  as.data.frame() %>%
+  mutate(miRNA = rownames(.)) %>%
+  relocate(miRNA)
+write_csv(norm_counts, file.path(count_dir, "DESeq2_normalized_counts.csv"))
+
+vsd <- vst(dds, blind = FALSE)
+vsd_mat <- assay(vsd) %>%
+  as.data.frame() %>%
+  mutate(miRNA = rownames(.)) %>%
+  relocate(miRNA)
+write_csv(vsd_mat, file.path(count_dir, "DESeq2_VST_matrix.csv"))
+
+cat("📦 Saved normalized counts and VST matrix.\n")
