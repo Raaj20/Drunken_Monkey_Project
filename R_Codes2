@@ -1,0 +1,28 @@
+
+# counts: matrix genes x samples
+# colData: data.frame with Sample, Subject, Timepoint, Sex, etc.
+
+dds <- DESeqDataSetFromMatrix(countData = counts,
+                              colData   = colData,
+                              design    = ~ Timepoint)  # design not used for PCA, just needed
+
+# Variance Stabilizing Transform
+vsd <- vst(dds, blind = TRUE)         # blind=TRUE ignores design; good for QC/PCA
+mat <- assay(vsd)
+
+# PCA (base R)
+pca <- prcomp(t(mat), scale. = TRUE)
+scores <- as.data.frame(pca$x)
+scores$Timepoint <- colData$Timepoint
+scores$Subject   <- colData$Subject
+scores$Sex       <- colData$Sex
+
+# Plot with ggplot2
+library(ggplot2)
+ggplot(scores, aes(PC1, PC2, color = Timepoint, shape = Sex, label = Subject)) +
+  geom_point(size = 3) +
+  stat_ellipse() +
+  labs(title = "PCA of samples (VST)",
+       x = paste0("PC1 (", round(100*summary(pca)$importance[2,1], 1), "%)"),
+       y = paste0("PC2 (", round(100*summary(pca)$importance[2,2], 1), "%)")) +
+  theme_bw()
