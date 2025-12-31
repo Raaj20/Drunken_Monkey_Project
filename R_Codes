@@ -1,3 +1,29 @@
+library(dplyr)
+
+count_dir <- "/Users/viraa/Drunken_Monkey_R/Analysis/trimmed_reads/maturemiRNAcounts"
+files <- list.files(count_dir, pattern = "*-counts.txt", full.names = TRUE)
+
+count_list <- lapply(files, function(file) {
+  df <- read.table(file, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+  sample_name <- sub("_L002_R1_001-counts.txt", "", basename(file))
+  colnames(df)[2] <- sample_name 
+  return(df)
+})
+
+merged_counts <- Reduce(function(x, y) merge(x, y, by = "miRNA", all = TRUE), count_list)
+merged_counts[is.na(merged_counts)] <- 0
+write.csv(merged_counts, file = file.path(count_dir, "merged_miRNA_counts.csv"), row.names = FALSE)
+cat("✅ Merged count matrix saved to 'merged_miRNA_counts.csv'\n")
+
+
+merged_counts_filtered <- merged_counts[rowSums(merged_counts[ , -1]) > 0, ]
+write.csv(
+  merged_counts_filtered,
+  file = file.path(count_dir, "merged_miRNA_counts.filtered.csv"),
+  row.names = FALSE)
+cat("✅ Filtered count matrix saved to 'merged_miRNA_counts.filtered.csv'\n")
+
+
 
 # Choose your path and delimiter
 path <- "/Users/viraa/Drunken_Monkey_R/Analysis/trimmed_reads/maturemiRNAcounts/merged_miRNA_counts.csv"   
