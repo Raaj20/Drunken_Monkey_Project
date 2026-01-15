@@ -1,0 +1,107 @@
+# Drunken_Monkey_Project analyzed on the Lab iMac
+
+# Install Homebrew 
+% git clone https://github.com/Homebrew/brew homebrew
+% eval "$(homebrew/bin/brew shellenv)"
+brew update --force --quiet
+chmod -R go-w "$(brew --prefix)/share/zsh"
+
+# Create an environment in Conda
+% brew install miniforge
+% conda update -n base -c conda-forge conda
+
+conda create -n mirna_pipeline python=3.10
+
+# Restart Terminal
+% conda activate mirna_pipeline
+
+# Install required packages
+conda install -c bioconda fastqc
+conda install -c bioconda bbmap
+conda install -c bioconda bowtie
+conda install -c bioconda samtools
+conda install -c bioconda multiqc
+
+# Indexing and setting up Directories
+head mature.fa 
+grep '^>' mature.fa | head -n 20
+
+## Check if Macaca mullata is abbreviated as mml
+grep '^>' mature.fa | sed 's/>//' | cut -d'-' -f1 | sort -u
+
+### Double-checking if there are any Rhesus miRNAs to align
+grep -i 'Macaca mulatta' mature.fa | head
+grep '^>' maturemml.fa | head -n 50
+
+awk '/^>/{p = ($0 ~ /^>mml/)} p{print}' mature.fa > mature_mml.fa
+
+grep -c '^>' mature.fa 
+48885
+
+grep -c '^>' mature_mml.fa
+912
+
+grep '^>' mature_mml.fa | head -n 50
+>mml-miR-200c-5p MIMAT0026560 Macaca mulatta miR-200c-5p
+>mml-miR-200c-3p MIMAT0002195 Macaca mulatta miR-200c-3p
+
+### Convert Us to Ts and doublecheck number of miRNAs before and after conversion
+awk '/^>/{print; next} { gsub(/[Uu]/, "T"); print }' mature_mml.fa > mature_mmlTs.fa
+
+grep -c '^>' mature_mmlTs.fa 
+912
+
+head mature_mmlTs.fa                                                                
+>mml-miR-200c-5p MIMAT0026560 Macaca mulatta miR-200c-5p
+CGTCTTACCCAGCAGTGTTTGG
+>mml-miR-200c-3p MIMAT0002195 Macaca mulatta miR-200c-3p
+AATACTGCCGGGTAATGATGGA
+
+
+### Indexing the Rhesus macaque + U-->T converted .fa files
+bowtie-build mature_mmlTs.fa mature_mmlTs
+Settings:
+  Output files: "mature_mmlTs.*.ebwt"
+
+
+
+INPUTDIR="/Users/viraajv/Drunken_Monkey/Zipped_Files"
+OUTPUTDIR="/Users/viraajv/Drunken_Monkey/Analysis"
+INDEX="/Users/viraajv/Drunken_Monkey/Index"
+
+for file in "$INPUTDIR"/*.fastq; do   
+    echo "Running FastQC on: $file"
+    fastqc -o "$QCREPORT" -t 16 "$file"
+done
+
+cd /Users/viraajv/Drunken_Monkey/Zipped_Files/MultiQC_Report
+multiqc . -o .
+
+INPUTDIR="/Users/viraajv/Drunken_Monkey/Zipped_Files"
+OUTPUTDIR="/Users/viraajv/Drunken_Monkey/Analysis/trimmed_reads"
+
+mkdir -p "$OUTPUTDIR"
+
+for file in "$INPUTDIR"/*.fastq; do
+    i=$(basename "$file" .fastq)
+
+echo "Trimming adapter from $i..."
+
+bbduk.sh -Xmx27g \
+    in="$file" \
+    out="$OUTPUTDIR/${i}-Trimmed.fastq" \
+    literal=TGGAATTCTCGGGTGCCAAGGAACTCCAGTCAC \
+    ktrim=r k=31 mink=12 hdist=1 \
+    qtrim=r trimq=10 minlen=15
+done
+
+
+## Post-trimmed QC
+for file in "$OUTPUTDIR"/*Trimmed.fastq; do   
+    echo "Running FastQC on: $file"
+    fastqc -o "$QCREPORT" -t 16 "$file"
+done
+
+cd /Users/viraajv/Drunken_Monkey/Analysis/trimmed_reads/MultiQC_Report
+multiqc . -o .
+
