@@ -90,7 +90,7 @@ echo "Trimming adapter from $i..."
 bbduk.sh -Xmx27g \
     in="$file" \
     out="$OUTPUTDIR/${i}-Trimmed.fastq" \
-    literal=TGGAATTCTCGGGTGCCAAGGAACTCCAGTCAC \
+    literal=TGGAATTCTCGGGTGCCAAGGAACTCCAGTCAC,GGGGGGGG \
     ktrim=r k=31 mink=12 hdist=1 \
     qtrim=r trimq=10 minlen=15
 done
