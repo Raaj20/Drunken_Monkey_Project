@@ -64,9 +64,9 @@ Settings:
   Output files: "mature_mmlTs.*.ebwt"
 
 
-INPUTDIR="/Volumes/Viraaj\ OneT/Drunken_Monkey/Unzipped_Files"
-OUTPUTDIR="/Volumes/Viraaj\ OneT/Drunken_Monkey/Analysis/trimmed_reads"
-INDEX="/Volumes/Viraaj\ OneT/Drunken_Monkey/Index"
+INPUTDIR="/Volumes/Viraaj_OneT/Drunken_Monkey/Unzipped_Files"
+OUTPUTDIR="/Volumes/Viraaj_OneT/Drunken_Monkey/Analysis"
+INDEX="/Volumes/Viraaj_OneT/Drunken_Monkey/Index"
 
 for file in "$INPUTDIR"/*.fastq; do   
     echo "Running FastQC on: $file"
@@ -76,8 +76,8 @@ done
 cd /Users/viraajv/Drunken_Monkey/Zipped_Files/MultiQC_Report
 multiqc . -o .
 
-INPUTDIR="/Volumes/Viraaj\ OneT/Drunken_Monkey/Unzipped_Files"
-OUTPUTDIR="/Volumes/Viraaj\ OneT/Drunken_Monkey/Analysis/trimmed_reads"
+INPUTDIR="/Volumes/Viraaj_OneT/Drunken_Monkey/Unzipped_Files"
+OUTPUTDIR="/Volumes/Viraaj_OneT/Drunken_Monkey/Analysis/trimmed_reads"
 
 mkdir -p "$OUTPUTDIR"
 
@@ -86,7 +86,7 @@ for file in "$INPUTDIR"/*.fastq; do
 
 echo "Trimming adapter from $i..."
 
-bbduk.sh -Xmx27g \
+bbduk.sh -Xmx10g \
     in="$file" \
     out="$OUTPUTDIR/${i}-Trimmed.fastq" \
     literal=TGGAATTCTCGGGTGCCAAGGAACTCCAGTCAC,GGGGGGGG \
@@ -101,6 +101,6 @@ for file in "$OUTPUTDIR"/*Trimmed.fastq; do
     fastqc -o "$QCREPORT" -t 16 "$file"
 done
 
-cd /Users/viraajv/Drunken_Monkey/Analysis/trimmed_reads/MultiQC_Report
+cd /Volumes/Viraaj_OneT/Analysis/trimmed_reads/MultiQC
 multiqc . -o .
 
