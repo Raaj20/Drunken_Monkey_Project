@@ -64,10 +64,9 @@ Settings:
   Output files: "mature_mmlTs.*.ebwt"
 
 
-
-INPUTDIR="/Volumes/Viraaj OneT/Drunken_Monkey/Unzipped_Files"
-OUTPUTDIR="/Volumes/Viraaj OneT/Drunken_Monkey/Analysis"
-INDEX="/Volumes/Viraaj OneT/Drunken_Monkey/Index"
+INPUTDIR="/Volumes/Viraaj\ OneT/Drunken_Monkey/Unzipped_Files"
+OUTPUTDIR="/Volumes/Viraaj\ OneT/Drunken_Monkey/Analysis/trimmed_reads"
+INDEX="/Volumes/Viraaj\ OneT/Drunken_Monkey/Index"
 
 for file in "$INPUTDIR"/*.fastq; do   
     echo "Running FastQC on: $file"
@@ -77,8 +76,8 @@ done
 cd /Users/viraajv/Drunken_Monkey/Zipped_Files/MultiQC_Report
 multiqc . -o .
 
-INPUTDIR="/Volumes/Viraaj OneT/Drunken_Monkey/Unzipped_Files"
-OUTPUTDIR="/Volumes/Viraaj OneT/Drunken_Monkey/Analysis/trimmed_reads"
+INPUTDIR="/Volumes/Viraaj\ OneT/Drunken_Monkey/Unzipped_Files"
+OUTPUTDIR="/Volumes/Viraaj\ OneT/Drunken_Monkey/Analysis/trimmed_reads"
 
 mkdir -p "$OUTPUTDIR"
 
