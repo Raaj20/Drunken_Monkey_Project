@@ -325,6 +325,503 @@ cat("  - HD_specific_miRNAs.csv\n")
 cat("  - Shared_miRNAs.csv\n")
 cat("  - DE_miRNA_categorization_summary.csv\n")
 
+library(edgeR)
+library(pheatmap)
+setwd("/Users/viraa/Drunken_Monkey_R/Piss_Drunk")
+
+# logCPM from the *same* object used for DE
+logCPM <- cpm(dge_baseline, log = TRUE, prior.count = 1)
+
+# pick the 29 miRNAs
+genes <- intersect(mirnas, rownames(logCPM))
+
+# order samples by Category
+ord <- order(meta_baseline$Category)
+logCPM_ord <- logCPM[genes, ord, drop = FALSE]
+meta_ord   <- meta_baseline[ord, ]
+
+# row z-score (visualization)
+mat_z <- t(scale(t(logCPM_ord)))
+
+# annotate Category - MAKE SURE ROWNAMES MATCH COLUMN NAMES OF mat_z
+ann_col <- data.frame(Category = meta_ord$Category)
+rownames(ann_col) <- colnames(mat_z)  # <-- CHANGE THIS LINE
+
+# Verify they match
+print(all(colnames(mat_z) == rownames(ann_col)))  # Should print TRUE
+
+# Define colors
+ann_colors <- list(
+  Category = c(LD = "lightcoral", BD = "lightgreen", HD = "lightblue")
+)
+
+png("miRNA_heatmap.png", width = 8, height = 10, units = "in", res = 300)
+
+pheatmap(mat_z,
+         annotation_col = ann_col,
+         annotation_colors = ann_colors,
+         show_colnames = FALSE,
+         cluster_cols = FALSE,
+         fontsize_row = 9,
+         cellwidth = 14,
+         cellheight = 20,
+         main = "Differential miRNA Expression",
+         color = colorRampPalette(c("darkblue", "white", "red3"))(50),
+         margins = c(2, 44))
+
+dev.off()
+
+# logCPM from edgeR
+logCPM <- cpm(dge_baseline, log = TRUE, prior.count = 1)
+genes <- intersect(mirnas, rownames(logCPM))
+
+# mean per category (logCPM space)
+mean_by_cat <- sapply(levels(meta_baseline$Category), function(cat) {
+  rowMeans(logCPM[genes, meta_baseline$Category == cat, drop = FALSE], na.rm = TRUE)
+})
+
+# miRNAs x categories matrix
+expr_mean_mat <- mean_by_cat
+colnames(expr_mean_mat) <- levels(meta_baseline$Category)
+
+# z-score rows for display
+expr_mean_z <- t(scale(t(expr_mean_mat)))
+
+pheatmap(expr_mean_z,
+         cluster_cols = FALSE,
+         fontsize_row = 7,
+         main = "Average DE miRNA")
 
 
 
+# logCPM already computed earlier
+# rows = miRNAs, columns = samples
+logCPM_baseline <- cpm(dge_baseline, log = TRUE)
+
+# Sample-sample Pearson correlation
+sample_cor <- cor(t(logCPM_baseline), method = "pearson")
+
+# Annotation data frame
+annotation_col <- data.frame(
+  Sex = meta_baseline$Sex,
+  Category = meta_baseline$Category
+)
+
+rownames(annotation_col) <- meta_baseline$Sample_ID
+
+all(colnames(sample_cor) == rownames(annotation_col))
+
+ann_colors <- list(
+  Sex = c(F = "#E69F00", M = "#56B4E9"),
+  Category = c(
+    LD  = "#F8766D",
+    BD  = "#7CAE00",
+    HD  = "#00BFC4",
+    VHD = "#C77CFF"
+  )
+)
+
+library(pheatmap)
+
+png("sample_correlation_heatmap.png", width = 4000, height = 4500, res = 300)
+pheatmap(
+  sample_cor,
+  annotation_col = annotation_col,
+  annotation_colors = ann_colors,
+  clustering_distance_rows = "euclidean",
+  clustering_distance_cols = "euclidean",
+  clustering_method = "complete",
+  fontsize = 2,
+  main = "Sample–Sample Correlation Heatmap (Baseline miRNAs, logCPM)"
+)
+dev.off()
+
+
+library(nnet)
+
+logCPM_DE <- logCPM[rownames(logCPM) %in% sig_miRNAs, ]
+
+logCPM_DE_t <- t(logCPM_DE)
+
+dim(logCPM_DE_t)
+# Remove VHD samples
+meta_baseline <- meta_baseline[meta_baseline$Category != "VHD", ]
+
+logCPM_DE_t <- logCPM_DE_t[meta_baseline$Sample_ID, , drop = FALSE]
+
+df_DE <- data.frame(
+  Category = factor(meta_baseline$Category, levels = c("LD","BD","HD")),
+  Sex      = factor(meta_baseline$Sex, levels = c("F","M")),
+  logCPM_DE_t,
+  check.names = FALSE
+)
+
+head(df_DE)
+dim(df_DE)
+
+
+# Model_3a: Eight miRNAs
+selectedeight <- c("mml-miR-1911-3p", "mml-miR-130b-3p", "mml-miR-320c", "mml-miR-448", "mml-miR-7208-5p", "mml-miR-9-5p", "mml-miR-502-3p", "mml-miR-875-5p" )
+selectedeight_safe <- paste0("`", selectedeight, "`")
+form_eight <- as.formula(paste("Category ~ Sex +", paste(selectedeight_safe, collapse = " + ")))
+
+form_eight <- multinom(form_eight, data = df_DE)
+
+AIC(form_eight)
+BIC(form_eight)
+
+df8 <- df_DE[, c("Category", selectedeight)]
+library(pROC)
+
+plot_roc_one_vs_all <- function(data, category, mirna, col="red") {
+  
+  # Binary outcome: category vs all other categories
+  data$binary <- ifelse(data$Category == category, 1, 0)
+  
+  roc_obj <- roc(data$binary, data[[mirna]], quiet = TRUE)
+  
+  plot(roc_obj, 
+       main = paste0(mirna, "\n", category, " vs All"),
+       col = col, lwd = 3)
+  
+  auc_val <- auc(roc_obj)
+  return(auc_val)
+}
+
+par(mfrow=c(1,8))   # 1 row, 4 miRNAs
+for (m in selectedeight) {
+  auc_val <- plot_roc_one_vs_all(df8, "LD", m)
+  print(paste("LD vs All |", m, "| AUC =", round(auc_val, 3)))}
+
+
+par(mfrow=c(1,8))
+for (m in selectedeight) {
+  auc_val <- plot_roc_one_vs_all(df8, "BD", m)
+  print(paste("BD vs All |", m, "| AUC =", round(auc_val, 3)))}
+
+
+par(mfrow=c(1,8))
+for (m in selectedeight) {
+  auc_val <- plot_roc_one_vs_all(df8, "HD", m)
+  print(paste("HD vs All |", m, "| AUC =", round(auc_val, 3)))}
+
+# Calculate Mann-Whitney U p-value for each miRNA (in EIGHT MIRNA DATASET)
+p_val <- wilcox.test(df8[[mirna]][df8$Category == "BD"], 
+                     df8[[mirna]][df8$Category == "LD"])$p.value
+
+print(p_val)
+
+final_miRNAs <- c("mml-miR-134-5p", "mml-miR-1911-3p", "mml-miR-455-5p", "mml-miR-506-3p", 
+                  "mml-miR-592-5p", "mml-miR-7208-5p", "mml-miR-9-5p")
+
+# BD vs All (one row)
+par(mfrow=c(1,7), mar=c(3,3,3,1))
+for (m in final_miRNAs) {
+  binary <- ifelse(df_DE$Category == "BD", 1, 0)
+  roc_obj <- roc(binary, df_DE[[m]], quiet = TRUE)
+  auc_val <- as.numeric(auc(roc_obj))
+  p_val <- wilcox.test(df_DE[[m]][df_DE$Category == "BD"], 
+                       df_DE[[m]][df_DE$Category != "BD"])$p.value
+  
+  plot(roc_obj, main = paste0(m, "\nAUC=", round(auc_val, 3), " p=", round(p_val, 3)), 
+       col = "darkgreen", lwd = 2, cex.main = 0.8)
+}
+
+# HD vs All (one row)
+par(mfrow=c(1,7), mar=c(3,3,3,1))
+for (m in final_miRNAs) {
+  binary <- ifelse(df_DE$Category == "HD", 1, 0)
+  roc_obj <- roc(binary, df_DE[[m]], quiet = TRUE)
+  auc_val <- as.numeric(auc(roc_obj))
+  p_val <- wilcox.test(df_DE[[m]][df_DE$Category == "HD"], 
+                       df_DE[[m]][df_DE$Category != "HD"])$p.value
+  
+  plot(roc_obj, main = paste0(m, "\nAUC=", round(auc_val, 3), " p=", round(p_val, 3)), 
+       col = "darkblue", lwd = 2, cex.main = 0.8)
+}
+
+results <- data.frame()
+
+#Mann U Whitney P-Test. 
+for (m in sig_miRNAs) {
+  p_bd_all <- wilcox.test(df_DE[[m]][df_DE$Category == "BD"], 
+                          df_DE[[m]][df_DE$Category != "BD"])$p.value
+  
+  p_hd_all <- wilcox.test(df_DE[[m]][df_DE$Category == "HD"], 
+                          df_DE[[m]][df_DE$Category != "HD"])$p.value
+  
+  
+  results <- rbind(results, data.frame(
+    miRNA = m,
+    p_BD_vs_All = round(p_bd_all, 4),
+    p_HD_vs_All = round(p_hd_all, 4)
+  ))
+}
+
+View(results)
+#write.csv(results, "pvalues_29miRNAs_vs_All.csv", row.names = FALSE)
+
+
+library(ggplot2)
+library(ggrepel)
+
+# -------------------------
+# Configuration
+# -------------------------
+input_dir <- "DE_outputs"        # Where your DE CSV files are
+output_dir <- "DE_outputs"       # Where to save new plots
+fdr_cut <- 0.05
+lfc_cut <- 0.3
+
+# Create output directory if needed
+if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
+
+# -------------------------
+# Function to create volcano plot from CSV
+# -------------------------
+create_volcano <- function(csv_file, label, fdr_cut = 0.05, lfc_cut = 0.3) {
+  
+  # Read the DE results
+  res <- read.csv(csv_file, stringsAsFactors = FALSE)
+  
+  # Prepare plot data
+  res$FDR_plot <- pmax(res$FDR, .Machine$double.xmin)
+  res$neg_log10_FDR <- -log10(res$FDR_plot)
+  res$Significant <- ifelse(abs(res$logFC) >= lfc_cut & res$FDR < fdr_cut, 
+                            "Significant", "Not significant")
+  
+  # Count significant miRNAs
+  n_sig <- sum(res$Significant == "Significant")
+  message(paste(label, ":", n_sig, "significant miRNAs"))
+  
+  # Create plot
+  p <- ggplot(res, aes(x = logFC, y = neg_log10_FDR)) +
+    geom_point(aes(color = Significant), size = 3, alpha = 0.7) +
+    scale_color_manual(values = c("Significant" = "red", 
+                                  "Not significant" = "grey60")) +
+    
+    # Threshold lines
+    geom_vline(xintercept = c(-lfc_cut, lfc_cut), 
+               linetype = "dashed", color = "blue", linewidth = 0.5) +
+    geom_hline(yintercept = -log10(fdr_cut), 
+               linetype = "dashed", color = "blue", linewidth = 0.5) +
+    
+    # Non-overlapping labels for significant points
+    geom_text_repel(
+      data = subset(res, Significant == "Significant"),
+      aes(label = miRNA),
+      size = 3.5,
+      box.padding = 0.5,
+      point.padding = 0.3,
+      max.overlaps = 20,
+      segment.color = "grey50",
+      segment.size = 0.3,
+      min.segment.length = 0
+    ) +
+    
+    # Labels and styling
+    labs(
+      x = "log2 Fold Change",
+      y = "-log10(FDR)",
+      title = paste0("Volcano Plot: ", label),
+      subtitle = paste0("FDR < ", fdr_cut, " & |logFC| ≥ ", lfc_cut, 
+                        " | Adjusted for Sex"),
+      color = ""
+    ) +
+    
+    # Axis limits
+    xlim(c(-4, 8)) +
+    ylim(c(0, 3)) +
+    
+    # Theme
+    theme_classic(base_size = 14) +
+    theme(
+      legend.position = "top",
+      legend.text = element_text(size = 12),
+      axis.title = element_text(size = 14, face = "bold"),
+      plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 12, hjust = 0.5, color = "grey30"),
+      panel.grid.major = element_line(color = "grey90", linewidth = 0.2)
+    )
+  
+  # Save plot
+  output_file <- file.path(output_dir, paste0("Volcano_", label, "_FDR.png"))
+  ggsave(
+    filename = output_file,
+    plot = p,
+    width = 14, 
+    height = 10, 
+    dpi = 300
+  )
+  
+  message(paste("Saved:", output_file))
+  
+  return(p)
+}
+
+# -------------------------
+# Generate all volcano plots
+# -------------------------
+
+# Define your comparisons (must match your CSV filenames)
+comparisons <- list(
+  list(file = "DE_BD_vs_LD.csv", label = "BD_vs_LD"),
+  list(file = "DE_HD_vs_LD.csv", label = "HD_vs_LD"),
+  list(file = "DE_HD_vs_BD.csv", label = "HD_vs_BD")
+)
+
+# Create plots
+plots <- list()
+for(comp in comparisons) {
+  csv_path <- file.path(input_dir, comp$file)
+  
+  if(file.exists(csv_path)) {
+    plots[[comp$label]] <- create_volcano(
+      csv_file = csv_path,
+      label = comp$label,
+      fdr_cut = fdr_cut,
+      lfc_cut = lfc_cut
+    )
+  } else {
+    warning(paste("File not found:", csv_path))
+  }
+}
+
+message("\n=== Volcano plot generation complete! ===")
+
+
+
+library(ggplot2)
+library(ggforce)
+
+# ============================================================
+#  USER INPUT
+# ============================================================
+
+list_A_name <- "BD"
+list_B_name <- "HD"
+
+list_A <- c("mml-miR-96",
+            "mml-miR-27a-3p",
+            "mml-miR-455-5p",
+            "mml-miR-448",
+            "mml-miR-9-5p",
+            "mml-miR-592-5p",
+            "mml-miR-875-5p",
+            "mml-miR-215-5p",
+            "mml-miR-216b",
+            "mml-miR-134-5p",
+            "mml-miR-7208-5p",
+            "mml-miR-603",
+            "mml-miR-7173-5p",
+            "mml-miR-942-5p",
+            "mml-miR-147a",
+            "mml-miR-607"
+            )
+
+list_B <- c("mml-miR-7173-5p",
+            "mml-miR-942-5p",
+            "mml-miR-147a",
+            "mml-miR-607",
+            "mml-miR-502-3p",
+            "mml-miR-573",
+            "mml-miR-320c",
+            "mml-miR-1911-3p",
+            "mml-miR-144",
+            "mml-miR-7182-5p",
+            "mml-miR-6129",
+            "mml-miR-7182-3p",
+            "mml-miR-450b-3p",
+            "mml-miR-411-3p")
+
+# ============================================================
+#  COMPUTATION
+# ============================================================
+
+only_A  <- setdiff(list_A, list_B)
+only_B  <- setdiff(list_B, list_A)
+both_AB <- intersect(list_A, list_B)
+
+cat("=== Venn Diagram Summary ===\n")
+cat(sprintf("Only in %s  (%d): %s\n", list_A_name, length(only_A),  paste(only_A,  collapse = ", ")))
+cat(sprintf("Shared       (%d): %s\n",              length(both_AB), paste(both_AB, collapse = ", ")))
+cat(sprintf("Only in %s  (%d): %s\n", list_B_name, length(only_B),  paste(only_B,  collapse = ", ")))
+
+# ============================================================
+#  LAYOUT
+# ============================================================
+
+r    <- 3.5
+cx   <- 0
+cy_A <- 2.5
+cy_B <- -2.5
+
+# ============================================================
+#  PLOT — only circle names, n counts, and shared count shown
+# ============================================================
+
+venn <- ggplot() +
+  
+  # ---- Circle A (top, blue) ----
+ggforce::geom_circle(
+  aes(x0 = cx, y0 = cy_A, r = r),
+  fill = "lightgreen", colour = "limegreen", linewidth = 1.8, alpha = 0.55
+) +
+  
+  # ---- Circle B (bottom, green) ----
+ggforce::geom_circle(
+  aes(x0 = cx, y0 = cy_B, r = r),
+  fill = "lightblue", colour = "skyblue", linewidth = 1.8, alpha = 0.55
+) +
+  
+  # ---- Circle name labels (outside, bold) ----
+annotate("text",
+         x = cx, y = cy_A + r + 0.55,
+         label    = list_A_name,
+         fontface = "bold", size = 9, colour = "black"
+) +
+  annotate("text",
+           x = cx, y = cy_B - r - 0.55,
+           label    = list_B_name,
+           fontface = "bold", size = 9, colour = "black"
+  ) +
+  
+  # ---- n= unique counts (inside top/bottom of each circle) ----
+annotate("text",
+         x = cx, y = cy_A + 1.8,
+         label    = paste0("n = ", length(only_A)),
+         size     = 6, colour = "black", fontface = "italic"
+) +
+  annotate("text",
+           x = cx, y = cy_B - 1.8,
+           label    = paste0("n = ", length(only_B)),
+           size     = 6, colour = "black", fontface = "italic"
+  ) +
+  
+  # ---- Shared count in overlap zone ----
+annotate("text",
+         x = cx, y = 0,
+         label    = paste0("n = ", length(both_AB)),
+         size     = 6, colour = "black", fontface = "bold"
+) +
+  
+  # ---- Clean theme, no title ----
+coord_fixed() +
+  theme_void() +
+  theme(plot.margin = margin(50, 50, 50, 50))
+print(venn)
+# ============================================================
+#  SAVE
+# ============================================================
+
+ggsave(
+  filename = "miRNA_venn_diagram.png",
+  plot     = venn,
+  width    = 8,
+  height   = 11,
+  dpi      = 300,
+  bg       = "white"
+)
+
+cat("\nSaved: miRNA_venn_diagram.png\n")
+print(venn)
