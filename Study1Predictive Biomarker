@@ -1,0 +1,330 @@
+library(edgeR)
+
+# -------------------------
+# 1️⃣ Set working directory and load filtered counts
+# -------------------------
+setwd("/Users/viraa/Drunken_Monkey_R/Piss_Drunk")
+dge_filtered <- read.csv("filtered_miRNA_counts.csv", row.names = 1, check.names = FALSE)
+
+# Original counts column names
+colnames(dge_filtered)
+
+# Clean them to match metadata:
+# Example: 10360_B_S33 -> 10360B
+colnames(dge_filtered) <- gsub("_B_.*", "B", colnames(dge_filtered))
+colnames(dge_filtered) <- gsub("_P_.*", "P", colnames(dge_filtered))
+
+# Check
+colnames(dge_filtered)
+
+# -------------------------
+# 2️⃣ Load and clean metadata
+# -------------------------
+meta <- read.csv("sample_metadata.csv", stringsAsFactors = FALSE)
+
+
+# Trim whitespace and set factor levels
+meta$Sample_ID <- trimws(meta$Sample_ID)
+meta$Timepoint <- factor(trimws(meta$Timepoint), levels = c("baseline", "post"))
+meta$Sex <- factor(trimws(meta$Sex), levels = c("F", "M"))
+meta$Category <- factor(trimws(meta$Category), levels = c("LD", "BD", "HD"))
+
+# -------------------------
+# 3️⃣ Match metadata to counts safely
+# -------------------------
+common_samples <- intersect(colnames(dge_filtered), meta$Sample_ID)
+
+counts_filtered <- dge_filtered[, colnames(dge_filtered) %in% meta$Sample_ID]
+meta_filtered <- meta[meta$Sample_ID %in% common_samples, ]
+
+# Reorder metadata to match counts
+meta_filtered <- meta_filtered[match(colnames(counts_filtered), meta_filtered$Sample_ID), ]
+
+# Check that all sample IDs match
+if(!all(colnames(counts_filtered) == meta_filtered$Sample_ID)) {
+  stop("Sample IDs in counts and metadata do not match!")
+}
+
+baseline_samples <- meta_filtered$Sample_ID[meta_filtered$Timepoint == "baseline"]
+
+# -------------------------
+# 4️⃣ Subset baseline samples
+# -------------------------
+
+if(length(baseline_samples) == 0) stop("No baseline samples found. Check Timepoint column!")
+
+counts_baseline <- counts_filtered[, baseline_samples]
+meta_baseline <- meta_filtered[meta_filtered$Sample_ID %in% baseline_samples, ]
+
+# -------------------------
+# 5️⃣ Create DGEList and normalize
+# -------------------------
+dge_all <- DGEList(counts = counts_filtered)
+dge_all <- calcNormFactors(dge_all, method = "TMM")
+
+CPM_all <- cpm(dge_all, log = FALSE)
+#write.csv(CPM_all, "Normalized_CPM_all_samples.csv")
+
+logCPM_all <- cpm(dge_all, log = TRUE)
+#write.csv(logCPM_all, "Normalized_logCPM_all_samples.csv")
+
+
+# -------------------------
+# Split into baseline and post AFTER normalization
+# -------------------------
+baseline_samples <- meta_filtered$Sample_ID[meta_filtered$Timepoint == "baseline"]
+post_samples     <- meta_filtered$Sample_ID[meta_filtered$Timepoint == "post"]
+
+logCPM_baseline <- logCPM_all[, baseline_samples]
+logCPM_post     <- logCPM_all[, post_samples]
+
+#write.csv(logCPM_baseline, "Normalized_logCPM_baseline.csv")
+#write.csv(logCPM_post,     "Normalized_logCPM_post.csv")
+
+
+# -------------------------
+# 6️⃣ Design matrix for sex
+# -------------------------
+meta_baseline$Sex <- factor(meta_baseline$Sex, levels = c("F", "M"))
+meta_baseline$Category <- factor(
+  meta_baseline$Category,
+  levels = c("LD", "BD", "HD")
+)
+
+design <- model.matrix(~ Sex, data = meta_baseline)
+
+# -------------------------
+# ✅ Ready for DE analysis
+# -------------------------
+dge_baseline <- dge_all[, baseline_samples]
+
+meta_baseline <- meta_filtered[
+  match(colnames(dge_baseline), meta_filtered$Sample_ID),
+]
+
+meta_baseline$Sex <- droplevels(factor(meta_baseline$Sex, levels = c("F", "M")))
+
+design <- model.matrix(~ Sex, data = meta_baseline)
+
+stopifnot(nrow(design) == ncol(dge_baseline))
+
+dge_baseline <- estimateDisp(dge_baseline, design)
+
+# Fit GLM
+fit <- glmQLFit(dge_baseline, design)
+
+# Test for sex effect (assuming 'SexM vs F' is coef 2)
+qlf <- glmQLFTest(fit, coef = 2)
+
+# Look at top DE miRNAs
+topTags(qlf)
+
+
+## PCA Plot
+# PCA expects samples in rows
+pca_input <- t(logCPM_baseline)
+
+pca_res <- prcomp(pca_input, scale. = TRUE)
+library(ggplot2)
+
+# Combine PCA scores with metadata
+pca_df <- data.frame(
+  PC1 = pca_res$x[,1],
+  PC2 = pca_res$x[,2],
+  Sample = rownames(pca_res$x),
+  Sex = meta_baseline$Sex,
+  Category = meta_baseline$Category
+)
+
+p <- ggplot(pca_df, aes(x = PC1, y = PC2,
+                   color = Category,
+                   shape = Sex,
+                   label = NA)) +
+  geom_point(size = 4) +
+  geom_text(vjust = -0.6, size = 3) +
+  xlab(paste0("PC1 (", round(summary(pca_res)$importance[2,1]*100, 1), "%)")) +
+  ylab(paste0("PC2 (", round(summary(pca_res)$importance[2,2]*100, 1), "%)")) +
+  theme_minimal() +
+  ggtitle("PCA of Baseline miRNAs (logCPM)\nColored by Drinking Category, Shaped by Sex")
+p
+#ggsave("PCA_plot.png", p, width = 8, height = 6, dpi = 300)
+
+
+
+library(edgeR)
+
+# -------------------------
+# 0) Ensure factors + reference levels
+# -------------------------
+# Ensure initial alignment
+## 1. Clean metadata sample IDs
+meta_baseline$Sample_ID <- trimws(as.character(meta_baseline$Sample_ID))
+
+## 2. Drop unusable samples (VHD + NA IDs)
+meta_baseline <- meta_baseline[
+  !is.na(meta_baseline$Sample_ID) &
+    meta_baseline$Category != "VHD",
+]
+
+## 3. Keep only samples shared by counts and metadata
+common <- intersect(colnames(dge_baseline), meta_baseline$Sample_ID)
+
+dge_baseline  <- dge_baseline[, common, keep.lib.sizes = FALSE]
+meta_baseline <- meta_baseline[meta_baseline$Sample_ID %in% common, ]
+
+## 4. Align ONCE using rownames (robust method)
+rownames(meta_baseline) <- meta_baseline$Sample_ID
+meta_baseline <- meta_baseline[colnames(dge_baseline), , drop = FALSE]
+
+stopifnot(identical(rownames(meta_baseline), colnames(dge_baseline)))
+
+## 5. Set factors cleanly
+meta_baseline$Category <- droplevels(factor(
+  meta_baseline$Category,
+  levels = c("LD","BD","HD")
+))
+meta_baseline$Sex <- droplevels(factor(
+  meta_baseline$Sex,
+  levels = c("F","M")
+))
+
+
+# -------------------------
+# 1) Design + fit (Category adjusted for Sex)
+# -------------------------
+design <- model.matrix(~ Category + Sex, data = meta_baseline)
+
+dge_baseline <- estimateDisp(dge_baseline, design)
+fit <- glmQLFit(dge_baseline, design)
+  
+  invisible(res)
+
+
+# -------------------------
+# 3) Run all pairwise comparisons (Category), adjusted for Sex
+# -------------------------
+# Note: With reference LD in the design, contrasts can be written cleanly.
+
+results_list <- list(
+  BD_vs_LD  = run_contrast(fit, design, "CategoryBD",                    "BD_vs_LD"),
+  HD_vs_LD  = run_contrast(fit, design, "CategoryHD",                    "HD_vs_LD"),
+  HD_vs_BD  = run_contrast(fit, design, "CategoryHD - CategoryBD",       "HD_vs_BD")
+)
+
+# Optional: global test of any Category effect (BD/HD jointly)
+qlf_global <- glmQLFTest(fit, coef = 2:3)
+write.csv(topTags(qlf_global, n = Inf)$table,
+          file = file.path("DE_outputs", "DE_GLOBAL_Category_effect.csv"))
+
+
+
+library(edgeR)
+
+# -------------------------
+# 0) Ensure factors + reference levels
+# -------------------------
+meta_baseline <- meta_baseline[match(colnames(dge_baseline), meta_baseline$Sample_ID), ]
+stopifnot(all(colnames(dge_baseline) == meta_baseline$Sample_ID))
+keep_samples <- meta_baseline$Category != "VHD"
+meta_baseline <- meta_baseline[keep_samples, ]
+dge_baseline  <- dge_baseline[, keep_samples, keep.lib.sizes = FALSE]
+meta_baseline$Category <- droplevels(meta_baseline$Category)
+meta_baseline$Category <- factor(meta_baseline$Category, levels = c("LD","BD","HD"))
+meta_baseline$Sex      <- factor(meta_baseline$Sex, levels = c("F","M"))
+
+# -------------------------
+# 1) Design + fit (Category adjusted for Sex)
+# -------------------------
+design <- model.matrix(~ Category + Sex, data = meta_baseline)
+dge_baseline <- estimateDisp(dge_baseline, design)
+fit <- glmQLFit(dge_baseline, design)
+
+invisible(res)
+
+# -------------------------
+# 3) Run all pairwise comparisons (Category), adjusted for Sex
+# -------------------------
+# Note: With reference LD in the design, contrasts can be written cleanly.
+results_list <- list(
+  BD_vs_LD  = run_contrast(fit, design, "CategoryBD",                    "BD_vs_LD"),
+  HD_vs_LD  = run_contrast(fit, design, "CategoryHD",                    "HD_vs_LD"),
+  HD_vs_BD  = run_contrast(fit, design, "CategoryHD - CategoryBD",       "HD_vs_BD")
+)
+
+# Optional: global test of any Category effect (BD/HD jointly)
+qlf_global <- glmQLFTest(fit, coef = 2:3)
+write.csv(topTags(qlf_global, n = Inf)$table,
+          file = file.path("DE_outputs", "DE_GLOBAL_Category_effect.csv"))
+
+# =====================================================
+# CATEGORIZE THE 29 GLOBAL miRNAs BY PAIRWISE PATTERNS
+# =====================================================
+
+# Step 1: Extract the 29 global DE miRNAs (FDR < 0.05)
+global_de_list <- rownames(topTags(qlf_global, n = Inf)$table)[
+  topTags(qlf_global, n = Inf)$table$FDR < 0.05
+]
+
+cat("Total global DE miRNAs:", length(global_de_list), "\n\n")
+
+# Step 2: Extract significant miRNAs from pairwise tests (FDR < 0.05)
+bd_vs_ld_sig <- rownames(results_list$BD_vs_LD[
+  results_list$BD_vs_LD$FDR < 0.05, 
+])
+
+hd_vs_ld_sig <- rownames(results_list$HD_vs_LD[
+  results_list$HD_vs_LD$FDR < 0.05, 
+])
+
+cat("BD vs LD significant (pairwise):", length(bd_vs_ld_sig), "\n")
+cat("HD vs LD significant (pairwise):", length(hd_vs_ld_sig), "\n\n")
+
+# Step 3: Filter to ONLY include the 29 global miRNAs
+bd_vs_ld_sig <- bd_vs_ld_sig[bd_vs_ld_sig %in% global_de_list]
+hd_vs_ld_sig <- hd_vs_ld_sig[hd_vs_ld_sig %in% global_de_list]
+
+# Step 4: Categorize into BD-specific, HD-specific, and shared
+bd_specific <- setdiff(bd_vs_ld_sig, hd_vs_ld_sig)  # In BD vs LD but NOT HD vs LD
+hd_specific <- setdiff(hd_vs_ld_sig, bd_vs_ld_sig)  # In HD vs LD but NOT BD vs LD
+shared <- intersect(bd_vs_ld_sig, hd_vs_ld_sig)     # In BOTH
+
+# Step 5: Report numbers
+cat("========================================\n")
+cat("CATEGORIZATION OF THE 29 GLOBAL miRNAs:\n")
+cat("========================================\n")
+cat("BD-specific:", length(bd_specific), "\n")
+cat("HD-specific:", length(hd_specific), "\n")
+cat("Shared (both BD & HD):", length(shared), "\n")
+cat("Total:", length(bd_specific) + length(hd_specific) + length(shared), "\n")
+cat("(Should equal 29)\n\n")
+
+# Step 6: Create summary table
+summary_table <- data.frame(
+  Category = c("BD-specific", "HD-specific", "Shared"),
+  Count = c(length(bd_specific), length(hd_specific), length(shared))
+)
+print(summary_table)
+
+# Step 7: Save categorized miRNA lists
+write.csv(data.frame(miRNA = bd_specific, Category = "BD-specific"), 
+          file = file.path("DE_outputs", "BD_specific_miRNAs.csv"), 
+          row.names = FALSE)
+
+write.csv(data.frame(miRNA = hd_specific, Category = "HD-specific"), 
+          file = file.path("DE_outputs", "HD_specific_miRNAs.csv"), 
+          row.names = FALSE)
+
+write.csv(data.frame(miRNA = shared, Category = "Shared"), 
+          file = file.path("DE_outputs", "Shared_miRNAs.csv"), 
+          row.names = FALSE)
+
+
+cat("\n✓ Results saved to DE_outputs/\n")
+cat("  - BD_specific_miRNAs.csv\n")
+cat("  - HD_specific_miRNAs.csv\n")
+cat("  - Shared_miRNAs.csv\n")
+cat("  - DE_miRNA_categorization_summary.csv\n")
+
+
+
+
