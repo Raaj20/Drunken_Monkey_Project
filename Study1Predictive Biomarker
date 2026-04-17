@@ -315,8 +315,8 @@ library(pROC)
 library(nnet)
 
 
-final_miRNAs <- c("mml-miR-134-5p", "mml-miR-1911-3p", "mml-miR-455-5p", "mml-miR-506-3p", 
-                  "mml-miR-592-5p", "mml-miR-7208-5p", "mml-miR-9-5p")
+final_miRNAs <- c("mml-miR-1911-3p", "mml-miR-455-5p", "mml-miR-592-5p", 
+                  "mml-miR-7182-3p", "mml-miR-9-5p")
 
 logCPM_t <- as.data.frame(t(logCPM[final_miRNAs, ]))
 logCPM_t$Sample_ID <- rownames(logCPM_t)
@@ -325,8 +325,8 @@ rownames(df_DE) <- df_DE$Sample_ID
 
 
 # ROC: BD vs All
-png("ROC_BD_vs_All.png", width = 14, height = 4, units = "in", res = 300)
-par(mfrow=c(1,7), mar=c(3,3,3,1))
+png("ROC_BD_vs_All.png", width = 10, height = 2, units = "in", res = 300)
+par(mfrow=c(1,5), mar=c(3,3,3,1))
 for (m in final_miRNAs) {
   binary  <- ifelse(df_DE$Category == "BD", 1, 0)
   roc_obj <- roc(binary, df_DE[[m]], quiet = TRUE)
@@ -340,8 +340,8 @@ dev.off()
 
 
 # ROC: HD vs All
-png("ROC_HD_vs_All.png", width = 14, height = 4, units = "in", res = 300)
-par(mfrow=c(1,7), mar=c(3,3,3,1))
+png("ROC_HD_vs_All.png", width = 10, height = 2, units = "in", res = 300)
+par(mfrow=c(1,5), mar=c(3,3,3,1))
 for (m in final_miRNAs) {
   binary  <- ifelse(df_DE$Category == "HD", 1, 0)
   roc_obj <- roc(binary, df_DE[[m]], quiet = TRUE)
@@ -365,5 +365,225 @@ for (m in final_miRNAs) {
 }
 View(results)
 
+
 write.csv(results, "pvalues_miRNAs_vs_All.csv", row.names = FALSE)
+
+library(ggplot2)
+library(ggforce)
+
+list_A_name <- "BD"
+list_B_name <- "HD"
+
+list_A <- c("mml-miR-502-3p",
+            "mml-miR-7173-5p",
+            "mml-miR-573",
+            "mml-miR-942-5p",
+            "mml-miR-320c",
+            "mml-miR-1911-3p",
+            "mml-miR-147a",
+            "mml-miR-7182-5p",
+            "mml-miR-6129",
+            "mml-miR-144",
+            "mml-miR-7182-3p",
+            "mml-miR-192-3p",
+            "mml-miR-892c-3p",
+            "mml-miR-411-3p",
+            "mml-miR-450b-3p",
+            "mml-miR-548g-5p",
+            "mml-miR-4677-3p"
+            )
+
+list_B <- c("mml-miR-877-3p",
+            "mml-miR-127-3p",
+            "mml-miR-27a-3p",
+            "mml-miR-455-5p",
+            "mml-miR-9-5p",
+            "mml-miR-151-5p",
+            "mml-miR-147a",
+            "mml-miR-607",
+            "mml-miR-448",
+            "mml-miR-592-5p",
+            "mml-miR-942-5p",
+            "mml-miR-875-5p",
+            "mml-miR-134-5p",
+            "mml-miR-215-5p",
+            "mml-miR-361-3p",
+            "mml-miR-7173-5p",
+            "mml-miR-603",
+            "mml-miR-374a-5p",
+            "mml-miR-216b")
+
+only_A  <- setdiff(list_A, list_B)
+only_B  <- setdiff(list_B, list_A)
+both_AB <- intersect(list_A, list_B)
+
+
+r    <- 3.5
+cx   <- 0
+cy_A <- 2.5
+cy_B <- -2.5
+
+
+venn <- ggplot() +
+  
+  # ---- Circle A (top, blue) ----
+ggforce::geom_circle(aes(x0 = cx, y0 = cy_A, r = r), fill = "lightgreen", colour = "limegreen", linewidth = 1.8, alpha = 0.55) +
+  
+  # ---- Circle B (bottom, green) ----
+ggforce::geom_circle(aes(x0 = cx, y0 = cy_B, r = r), fill = "lightblue", colour = "skyblue", linewidth = 1.8, alpha = 0.55) +
+  
+  # ---- Circle name labels (outside, bold) ----
+annotate("text",x = cx, y = cy_A + r + 0.55,label    = list_A_name,fontface = "bold", size = 9, colour = "black") +
+  annotate("text",x = cx, y = cy_B - r - 0.55, label    = list_B_name, fontface = "bold", size = 9, colour = "black") +
+  
+  # ---- n= unique counts (inside top/bottom of each circle) ----
+annotate("text", x = cx, y = cy_A + 1.8, label    = paste0("n = ", length(only_A)), size     = 6, colour = "black", fontface = "italic") +
+  annotate("text",x = cx, y = cy_B - 1.8, label    = paste0("n = ", length(only_B)), size     = 6, colour = "black", fontface = "italic") +
+  
+  # ---- Shared count in overlap zone ----
+annotate("text", x = cx, y = 0, label    = paste0("n = ", length(both_AB)), size     = 6, colour = "black", fontface = "bold") +
+  
+  # ---- Clean theme, no title ----
+coord_fixed() + theme_void() + theme(plot.margin = margin(50, 50, 50, 50))
+print(venn)
+
+#ggsave( filename = "miRNA_venn_diagram.png", plot     = venn, width    = 8, height   = 11, dpi      = 300, bg       = "white")
+
+cat("\nSaved: miRNA_venn_diagram.png\n")
+print(venn)
+
+
+
+
+library(ggplot2)
+library(ggrepel)
+
+# -------------------------
+# Configuration
+# -------------------------
+input_dir <- "DE_outputs"        # Where your DE CSV files are
+output_dir <- "DE_outputs"       # Where to save new plots
+fdr_cut <- 0.05
+lfc_cut <- 0.3
+
+# Create output directory if needed
+if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
+
+# -------------------------
+# Function to create volcano plot from CSV
+# -------------------------
+create_volcano <- function(csv_file, label, fdr_cut = 0.05, lfc_cut = 0.3) {
+  
+  # Read the DE results
+  res <- read.csv(csv_file, stringsAsFactors = FALSE, row.names = 1)  # Make 1st column row names
+  res$miRNA <- rownames(res)  # Convert row names to a column called 'miRNA'
+  
+  # Prepare plot data
+  res$FDR_plot <- pmax(res$FDR, .Machine$double.xmin)
+  res$neg_log10_FDR <- -log10(res$FDR_plot)
+  res$Significant <- ifelse(abs(res$logFC) >= lfc_cut & res$FDR < fdr_cut, 
+                            "Significant", "Not significant")
+  
+  # Count significant miRNAs
+  n_sig <- sum(res$Significant == "Significant")
+  message(paste(label, ":", n_sig, "significant miRNAs"))
+  
+  # Create plot
+  p <- ggplot(res, aes(x = logFC, y = neg_log10_FDR)) +
+    geom_point(aes(color = Significant), size = 7, alpha = 1) +
+    scale_color_manual(values = c("Significant" = "red", 
+                                  "Not significant" = "grey60")) +
+    
+    # Threshold lines
+    geom_vline(xintercept = c(-lfc_cut, lfc_cut), 
+               linetype = "dashed", color = "blue", linewidth = 0.5) +
+    geom_hline(yintercept = -log10(fdr_cut), 
+               linetype = "dashed", color = "blue", linewidth = 0.5) +
+    
+    # Non-overlapping labels for significant points
+    geom_text_repel( data = subset(res, Significant == "Significant"),
+      aes(label = miRNA),
+      size = 6,
+      box.padding = 0.5,
+      point.padding = 0.3,
+      max.overlaps = 20,
+      segment.color = "grey50",
+      segment.size = 0.3,
+      min.segment.length = 0
+    ) +
+    
+    # Labels and styling
+    labs(
+      x = "log2 Fold Change",
+      y = "-log10(FDR)",
+      title = paste0("Volcano Plot: ", label),
+      subtitle = paste0("FDR < ", fdr_cut, " & |logFC| ≥ ", lfc_cut, 
+                        " | Adjusted for Sex"),
+      color = ""
+    ) +
+    
+    # Axis limits
+    xlim(c(-4, 8)) +
+    ylim(c(0, 3)) +
+    
+    # Theme
+    theme_classic(base_size = 16) +
+    theme(
+      legend.position = "top",
+      legend.text = element_text(size = 16),
+      axis.title = element_text(size = 16, face = "bold"),
+      plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 12, hjust = 0.5, color = "grey30"),
+      panel.grid.major = element_line(color = "grey90", linewidth = 0.2)
+    )
+  
+  # Save plot
+  output_file <- file.path(output_dir, paste0("Volcano_", label, "_FDR.png"))
+  ggsave(
+    filename = output_file,
+    plot = p,
+    width = 14, 
+    height = 10, 
+    dpi = 300
+  )
+  
+  message(paste("Saved:", output_file))
+  
+  return(p)
+}
+
+
+# Define your comparisons (must match your CSV filenames)
+comparisons <- list(
+  list(file = "DE_BD_vs_LD.csv", label = "BD_vs_LD"),
+  list(file = "DE_HD_vs_LD.csv", label = "HD_vs_LD"),
+  list(file = "DE_HD_vs_BD.csv", label = "HD_vs_BD")
+)
+
+# Create plots
+plots <- list()
+for(comp in comparisons) {
+  csv_path <- file.path(input_dir, comp$file)
+  
+  if(file.exists(csv_path)) {
+    plots[[comp$label]] <- create_volcano(
+      csv_file = csv_path,
+      label = comp$label,
+      fdr_cut = fdr_cut,
+      lfc_cut = lfc_cut
+    )
+  } else {
+    warning(paste("File not found:", csv_path))
+  }
+}
+
+
+
+# Base R approach
+
+tsv_path <- "/Users/viraa/TestingCode/Testing_Monkey/Study1/microTHD.tsv"
+csv_path <- "/Users/viraa/TestingCode/Testing_Monkey/Study1/microTHD.Csv"
+
+df <- read.delim(tsv_path, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+write.csv(df, csv_path, row.names = FALSE)
 
