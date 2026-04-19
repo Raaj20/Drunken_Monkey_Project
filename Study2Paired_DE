@@ -298,30 +298,99 @@ csv_path <- "/Users/viraa/TestingCode/Testing_Monkey/Study2/PathwayAnalysis/micr
 df <- read.delim(tsv_path, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
 #write.csv(df, csv_path, row.names = FALSE)
 
-library(tidyverse)
 setwd("/Users/viraa/TestingCode/Testing_Monkey/Study2/PathwayAnalysis")
 
-read_panther <- function(filepath, group_label) {
-  all_lines <- read_lines(filepath)
-  start_line <- which(str_detect(all_lines, "^PANTHER GO-Slim Biological Process")) + 1
-  
-  read_tsv(filepath, skip = start_line, show_col_types = FALSE) %>%
-    setNames(c(
-      "Pathway", "Ref_count", "Hit_count", "Expected",
-      "OverUnder", "FoldEnrichment", "RawPvalue", "FDR"
-    )) %>%
+BiocManager::install(c(
+  "clusterProfiler",
+  "org.Hs.eg.db",
+  "AnnotationDbi",
+  "enrichplot",
+  "ggplot2"        
+))
+
+
+library(clusterProfiler)
+library(org.Hs.eg.db)  
+library(AnnotationDbi)
+library(enrichplot)
+library(ggplot2)
+library(tidyverse)
+de_targets <- read.csv("microT_BD.csv")$gene_ensembl_id   # adjust col name
+de_targets <- unique(na.omit(de_targets))
+
+
+all_targets <- read.csv("AllUniquemiRNATargets.csv")$gene_ensembl_id  # adjust col name
+all_targets <- unique(na.omit(all_targets))
+
+
+ensg_to_entrez <- function(ensg_vec) {
+  mapped <- mapIds(
+    org.Hs.eg.db,
+    keys      = ensg_vec,
+    column    = "ENTREZID",
+    keytype   = "ENSEMBL",
+    multiVals = "first"       # keep one Entrez per ENSG
+  )
+  mapped <- mapped[!is.na(mapped)]
+  return(mapped)
+}
+
+de_entrez  <- ensg_to_entrez(de_targets)
+all_entrez <- ensg_to_entrez(all_targets)
+
+
+ego <- enrichGO(
+  gene          = de_entrez,
+  universe      = all_entrez,   # ← your custom background
+  OrgDb         = org.Hs.eg.db,
+  keyType       = "ENTREZID",
+  ont           = "ALL",        # BP, MF, CC, or ALL
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.2,
+  readable      = TRUE          # converts IDs → gene symbols in output
+)
+
+
+ekegg <- enrichKEGG(
+  gene          = de_entrez,
+  universe      = all_entrez,   # ← your custom background
+  organism      = "hsa",        # hsa = human, mmu = mouse
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.2
+)
+
+# Write to file
+write.csv(as.data.frame(ego),   "BD_GO_enrichment.csv",   row.names = FALSE)
+write.csv(as.data.frame(ekegg), "BD_KEGG_enrichment.csv", row.names = FALSE)
+
+colnames(read_csv("HD_GO_enrichment.csv"))
+
+read_pathway_csv <- function(filepath, group_label) {
+  read_csv(filepath, show_col_types = FALSE) %>%
+    rename(
+      Pathway        = Description,
+      Hit_count      = Count,
+      FDR            = p.adjust,
+      RawPvalue      = pvalue
+    ) %>%
     mutate(
-      Pathway = str_remove(Pathway, " \\([^)]+\\)$"),
-      RawPvalue = as.numeric(str_replace(RawPvalue, "< 1e-5", "0.009")),
+      Pathway        = str_remove(Pathway, " \\([^)]+\\)$"),
       FoldEnrichment = as.numeric(FoldEnrichment),
-      FDR = as.numeric(FDR),
-      logFDR = -log10(FDR),
-      Comparison = group_label
+      FDR            = as.numeric(FDR),
+      logFDR         = -log10(FDR),
+      Comparison     = group_label
     )
 }
 
-# --- Filter function: adjust thresholds here ---
-prep_plot_data <- function(data, min_hits = 10, min_fold = 1.2, top_n = 15) {
+# Load your files
+pathway_BDSlim <- read_pathway_csv("BD_GO_enrichment.csv", "BD")
+pathway_LDSlim <- read_pathway_csv("LD_GO_enrichment.csv", "LD")
+
+
+
+prep_plot_data <- function(data, min_hits = 5, min_fold = 1.2, top_n = 15) {
   data %>%
     filter(FDR < 0.05) %>%
     filter(Hit_count > min_hits) %>%        # <-- gene count filter
@@ -330,11 +399,6 @@ prep_plot_data <- function(data, min_hits = 10, min_fold = 1.2, top_n = 15) {
     slice_head(n = top_n)                   # take top N after sorting
 }
 
-# --- Load both groups ---
-pathway_BDSlim <- read_panther("BDanalysis.txt", "BD")
-pathway_LDSlim <- read_panther("LDanalysis.txt", "LD")
-
-# --- Combine and reorder Y-axis by max FoldEnrichment across groups ---
 plot_data <- bind_rows(
   prep_plot_data(pathway_BDSlim),
   prep_plot_data(pathway_LDSlim)
@@ -346,8 +410,7 @@ plot_data <- bind_rows(
 ggplot(plot_data, aes(x = Comparison, y = Pathway)) +
   geom_point(aes(size = FoldEnrichment, color = logFDR)) +
   scale_size_continuous(
-    range = c(4, 8),
-    breaks = c(1, 1.5, 2, 2.5, 3, 3.5, 4),
+    range = c(6, 10),
     name = "Fold Enrichment"
   ) +
   scale_color_gradient(
@@ -356,7 +419,7 @@ ggplot(plot_data, aes(x = Comparison, y = Pathway)) +
     name = expression(-log[10](FDR))
   ) +
   labs(
-    title = "Enriched GO Biological Process (GO-Slim)",
+    title = "Enriched Pathways",
     x = NULL,
     y = NULL
   ) +
@@ -370,18 +433,13 @@ ggplot(plot_data, aes(x = Comparison, y = Pathway)) +
     legend.position    = "right",
     panel.grid.major.x = element_blank(),
     panel.grid.major.y = element_line(color = "grey90", linewidth = 0.3),
-    plot.margin        = unit(c(0.5, 1, 0.5, 0.5), "cm")
+    plot.margin        = unit(c(0.5, 0.5, 0.5, 0.5), "cm")
   )
 
 
 # Save the plot
-#ggsave("Enriched_GOSlimLD&BD.png", 
-#       width = 9, height = 10, dpi = 300, units = "in")
-
-
-
-
-
+ggsave("Enriched_GO_Biological_Process_BD_vs_LD.png", 
+       width = 9, height = 10, dpi = 300, units = "in")
 
 
 
