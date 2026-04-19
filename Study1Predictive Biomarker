@@ -633,7 +633,7 @@ ego <- enrichGO(
   universe      = all_entrez,   # ← your custom background
   OrgDb         = org.Hs.eg.db,
   keyType       = "ENTREZID",
-  ont           = "ALL",        # BP, MF, CC, or ALL
+  ont           = "BP",        # BP, MF, CC, or ALL
   pAdjustMethod = "BH",
   pvalueCutoff  = 0.05,
   qvalueCutoff  = 0.2,
