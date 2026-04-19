@@ -1,0 +1,396 @@
+library(edgeR)
+
+# -------------------------
+# 1️⃣ Set working directory and load filtered counts
+# -------------------------
+setwd("/Users/viraa/TestingCode/Testing_Monkey/Study2")
+dge_filtered <- read.csv("filtered_miRNA_counts.csv", row.names = 1, check.names = FALSE)
+
+# Original counts column names
+colnames(dge_filtered)
+
+# Clean them to match metadata:
+# Example: 10360_B_S33 -> 10360B
+colnames(dge_filtered) <- gsub("_B_.*", "B", colnames(dge_filtered))
+colnames(dge_filtered) <- gsub("_P_.*", "P", colnames(dge_filtered))
+
+# Check
+colnames(dge_filtered)
+
+# -------------------------
+# 2️⃣ Load and clean metadata
+# -------------------------
+meta <- read.csv("sample_metadata.csv", stringsAsFactors = FALSE)
+
+
+# Trim whitespace and set factor levels
+meta$Sample_ID <- trimws(meta$Sample_ID)
+meta$Timepoint <- factor(trimws(meta$Timepoint), levels = c("baseline", "post"))
+meta$Sex <- factor(trimws(meta$Sex), levels = c("F", "M"))
+meta$Category <- factor(trimws(meta$Category), levels = c("LD", "BD", "HD"))
+common_samples <- intersect(colnames(dge_filtered), meta$Sample_ID)
+
+counts_filtered <- dge_filtered[, colnames(dge_filtered) %in% meta$Sample_ID]
+meta_filtered <- meta[meta$Sample_ID %in% common_samples, ]
+
+# Reorder metadata to match counts
+meta_filtered <- meta_filtered[match(colnames(counts_filtered), meta_filtered$Sample_ID), ]
+
+# Check that all sample IDs match
+if(!all(colnames(counts_filtered) == meta_filtered$Sample_ID)) {
+  stop("Sample IDs in counts and metadata do not match!")
+}
+
+# -------------------------
+# Split into baseline and post AFTER normalization
+# -------------------------
+baseline_samples <- meta_filtered$Sample_ID[meta_filtered$Timepoint == "baseline"]
+post_samples     <- meta_filtered$Sample_ID[meta_filtered$Timepoint == "post"]
+
+logCPM_baseline <- logCPM_all[, baseline_samples]
+logCPM_post     <- logCPM_all[, post_samples]
+
+write.csv(logCPM_baseline, "Normalized_logCPM_baseline.csv")
+write.csv(logCPM_post,     "Normalized_logCPM_post.csv")
+
+
+
+# -------------------------
+# Paired Post vs Baseline DE analysis
+# -------------------------
+# Extract subject ID from sample names (e.g. "10360B" -> "10360")
+meta_filtered$Subject <- gsub("[BP]$", "", meta_filtered$Sample_ID)
+meta_filtered$Subject <- as.factor(meta_filtered$Subject)
+meta_filtered <- meta_filtered[order(meta_filtered$Subject, meta_filtered$Timepoint), ]
+counts_filtered <- counts_filtered[, meta_filtered$Sample_ID]
+
+categories <- unique(meta_filtered$Category)
+
+for (cat in categories) {
+  meta_sub <- meta_filtered[meta_filtered$Category == cat, ]
+  meta_sub <- droplevels(meta_sub)
+  
+  n_subjects <- length(unique(meta_sub$Subject))
+  if (n_subjects < 2) {
+    message("Skipping ", cat, " — only ", n_subjects, " subject(s)")
+    next
+  }
+  
+  counts_sub <- counts_filtered[, meta_sub$Sample_ID]
+  design_sub <- model.matrix(~ Subject + Timepoint, data = meta_sub)
+  
+  dge_sub <- DGEList(counts = counts_sub)
+  dge_sub <- calcNormFactors(dge_sub, method = "TMM")
+  dge_sub <- estimateDisp(dge_sub, design_sub)
+  fit_sub <- glmQLFit(dge_sub, design_sub)
+  qlf_sub <- glmQLFTest(fit_sub, coef = "Timepointpost")
+  
+  res <- topTags(qlf_sub, n = Inf)
+  write.csv(res$table, paste0("/Users/viraa/TestingCode/Testing_Monkey/Study2", cat, ".csv"))
+  message("Done: ", cat)
+}
+
+
+## PCA Plot
+# PCA expects samples in rows
+pca_input <- t(logCPM_all)
+
+pca_res <- prcomp(pca_input, scale. = TRUE)
+library(ggplot2)
+
+# Combine PCA scores with metadata
+pca_df <- data.frame(
+  PC1 = pca_res$x[,1],
+  PC2 = pca_res$x[,2],
+  Sample = rownames(pca_res$x)
+)
+
+pca_df <- merge(pca_df, meta_filtered[, c("Sample_ID", "Sex", "Category", "Timepoint")],
+                by.x = "Sample", by.y = "Sample_ID")
+
+pvsb <- ggplot(pca_df, aes(x = PC1, y = PC2,
+                           color = Category,
+                           shape = Timepoint)) +
+  geom_point(size = 4) +
+  scale_shape_manual(values = c(baseline = 17, post = 16)) +
+  xlab(paste0("PC1 (", round(summary(pca_res)$importance[2,1]*100, 1), "%)")) +
+  ylab(paste0("PC2 (", round(summary(pca_res)$importance[2,2]*100, 1), "%)")) +
+  theme_minimal() +
+  ggtitle("PCA of Paired miRNAs (Post-EtOH vs Baseline)")
+pvsb
+
+
+
+
+library(pheatmap)
+
+# -------------------------
+# Configuration
+# -------------------------
+fdr_cut <- 0.05
+lfc_cut <- 0.3
+
+# -------------------------
+# Read DE results
+# -------------------------
+res_LD <- read.csv("/Users/viraa/TestingCode/Testing_Monkey/Study2/Study2LD.csv", 
+                   row.names = 1)
+res_BD <- read.csv("/Users/viraa/TestingCode/Testing_Monkey/Study2/Study2BD.csv", 
+                   row.names = 1)
+
+sig_LD <- rownames(res_LD[abs(res_LD$logFC) >= lfc_cut & res_LD$FDR < fdr_cut & !is.na(res_LD$FDR), ])
+sig_BD <- rownames(res_BD[abs(res_BD$logFC) >= lfc_cut & res_BD$FDR < fdr_cut & !is.na(res_BD$FDR), ])
+
+# -------------------------
+# Function to create and save heatmaps
+# -------------------------
+create_heatmaps <- function(sig_mirnas, category, meta_filtered, counts_filtered) {
+  
+  # Subset to category only
+  meta_sub <- meta_filtered[meta_filtered$Category == category, ]
+  counts_sub <- counts_filtered[, meta_sub$Sample_ID]
+  
+  # Build DGE and logCPM
+  dge_sub <- DGEList(counts = counts_sub)
+  dge_sub <- calcNormFactors(dge_sub, method = "TMM")
+  logCPM_sub <- cpm(dge_sub, log = TRUE, prior.count = 1)
+  
+  genes <- intersect(sig_mirnas, rownames(logCPM_sub))
+  message(paste(category, "- miRNAs found in logCPM:", length(genes)))
+  
+  # Order by Timepoint
+  ord <- order(meta_sub$Timepoint)
+  logCPM_ord <- logCPM_sub[genes, ord, drop = FALSE]
+  meta_ord <- meta_sub[ord, ]
+  
+  # Row z-score
+  mat_z <- t(scale(t(logCPM_ord)))
+  
+  # Annotation
+  ann_col <- data.frame(Timepoint = meta_ord$Timepoint)
+  rownames(ann_col) <- meta_ord$Sample_ID
+  
+  # ---- Heatmap 1: Per-sample ----
+  png(paste0("/Users/viraa/TestingCode/Testing_Monkey/Study2/Heatmap_", category, "_PerSample.png"),
+      width = 5, height = 1.5, units = "in", res = 300)
+  pheatmap(mat_z,
+           annotation_col = ann_col,
+           show_colnames = FALSE,
+           cluster_cols = FALSE,
+           fontsize_row = 8,
+           main = paste0(" ", category, " (Post vs Baseline)"))
+  dev.off()
+  
+  message(paste("Saved heatmaps for", category))
+}
+
+# -------------------------
+# Run for LD and BD separately
+# -------------------------
+create_heatmaps(sig_LD, "LD", meta_filtered, counts_filtered)
+create_heatmaps(sig_BD, "BD", meta_filtered, counts_filtered)
+
+
+library(ggplot2)
+library(ggrepel)
+
+# -------------------------
+# Configuration
+# -------------------------
+input_dir <- "/Users/viraa/TestingCode/Testing_Monkey/Study2"
+output_dir <- "/Users/viraa/TestingCode/Testing_Monkey/Study2"
+fdr_cut <- 0.05
+lfc_cut <- 0.3
+
+# -------------------------
+# Function to create volcano plot from CSV
+# -------------------------
+create_volcano <- function(csv_file, label, fdr_cut = 0.05, lfc_cut = 0.3) {
+  
+  res <- read.csv(csv_file, row.names = 1, stringsAsFactors = FALSE)
+  res$miRNA <- rownames(res)  # row names are miRNA names from your loop output
+  
+  res$FDR_plot <- pmax(res$FDR, .Machine$double.xmin)
+  res$neg_log10_FDR <- -log10(res$FDR_plot)
+  res$Significant <- ifelse(abs(res$logFC) >= lfc_cut & res$FDR < fdr_cut,
+                            "Significant", "Not significant")
+  
+  n_sig <- sum(res$Significant == "Significant")
+  message(paste(label, ":", n_sig, "significant miRNAs"))
+  
+  postvsbaseline <- ggplot(res, aes(x = logFC, y = neg_log10_FDR)) +
+    geom_point(aes(color = Significant), size = 4, alpha = 0.9) +
+    scale_color_manual(values = c("Significant" = "red",
+                                  "Not significant" = "grey60")) +
+    geom_vline(xintercept = c(-lfc_cut, lfc_cut),
+               linetype = "dashed", color = "blue", linewidth = 0.5) +
+    geom_hline(yintercept = -log10(fdr_cut),
+               linetype = "dashed", color = "blue", linewidth = 0.5) +
+    geom_text_repel(
+      data = subset(res, Significant == "Significant"),
+      aes(label = miRNA),
+      size = 8,
+      box.padding = 0.5,
+      point.padding = 0.3,
+      max.overlaps = 10,
+      segment.color = "grey50",
+      segment.size = 0.3,
+      min.segment.length = 0
+    ) +
+    labs(
+      x = "log2 Fold Change",
+      y = "-log10(FDR)",
+      title = paste0("Volcano Plot: ", label),
+      subtitle = paste0("FDR < ", fdr_cut, " & |logFC| ≥ ", lfc_cut,
+                        " | Paired Post-EtOH vs Baseline"),
+      color = ""
+    ) +
+    xlim(c(-10, 10)) +
+    ylim(c(0, 2)) +
+    theme_classic(base_size = 16) +
+    theme(
+      legend.position = "top",
+      legend.text = element_text(size = 12),
+      axis.title = element_text(size = 16, face = "bold"),
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 16, hjust = 0.5, color = "grey30"),
+      panel.grid.major = element_line(color = "grey90", linewidth = 0.2)
+    )
+  
+  output_file <- file.path(output_dir, paste0("Volcano_", label, "_FDR.png"))
+  ggsave(filename = output_file, plot = postvsbaseline, width = 14, height = 10, dpi = 300)
+  message(paste("Saved:", output_file))
+  
+  return(postvsbaseline)
+  
+}
+
+# -------------------------
+# Generate volcano plots for LD and BD
+# -------------------------
+comparisons <- list(
+  list(file = "Study2LD.csv", label = "Paired LD Comparisons"),
+  list(file = "Study2BD.csv", label = "Paired BD Comparisons")
+)
+
+plots <- list()
+for(comp in comparisons) {
+  csv_path <- file.path(input_dir, comp$file)
+  
+  if(file.exists(csv_path)) {
+    plots[[comp$label]] <- create_volcano(
+      csv_file = csv_path,
+      label = comp$label,
+      fdr_cut = fdr_cut,
+      lfc_cut = lfc_cut
+    )
+  } else {
+    warning(paste("File not found:", csv_path))
+  }
+}
+
+
+# Base R approach
+
+tsv_path <- "/Users/viraa/TestingCode/Testing_Monkey/Study2/PathwayAnalysis/microT_LD.tsv"
+csv_path <- "/Users/viraa/TestingCode/Testing_Monkey/Study2/PathwayAnalysis/microT_LD.csv"
+
+df <- read.delim(tsv_path, sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+#write.csv(df, csv_path, row.names = FALSE)
+
+library(tidyverse)
+setwd("/Users/viraa/TestingCode/Testing_Monkey/Study2/PathwayAnalysis")
+
+read_panther <- function(filepath, group_label) {
+  all_lines <- read_lines(filepath)
+  start_line <- which(str_detect(all_lines, "^PANTHER GO-Slim Biological Process")) + 1
+  
+  read_tsv(filepath, skip = start_line, show_col_types = FALSE) %>%
+    setNames(c(
+      "Pathway", "Ref_count", "Hit_count", "Expected",
+      "OverUnder", "FoldEnrichment", "RawPvalue", "FDR"
+    )) %>%
+    mutate(
+      Pathway = str_remove(Pathway, " \\([^)]+\\)$"),
+      RawPvalue = as.numeric(str_replace(RawPvalue, "< 1e-5", "0.009")),
+      FoldEnrichment = as.numeric(FoldEnrichment),
+      FDR = as.numeric(FDR),
+      logFDR = -log10(FDR),
+      Comparison = group_label
+    )
+}
+
+# --- Filter function: adjust thresholds here ---
+prep_plot_data <- function(data, min_hits = 10, min_fold = 1.2, top_n = 15) {
+  data %>%
+    filter(FDR < 0.05) %>%
+    filter(Hit_count > min_hits) %>%        # <-- gene count filter
+    filter(FoldEnrichment > min_fold) %>%   # <-- fold change filter
+    arrange(desc(FoldEnrichment)) %>%       # sort highest to lowest
+    slice_head(n = top_n)                   # take top N after sorting
+}
+
+# --- Load both groups ---
+pathway_BDSlim <- read_panther("BDanalysis.txt", "BD")
+pathway_LDSlim <- read_panther("LDanalysis.txt", "LD")
+
+# --- Combine and reorder Y-axis by max FoldEnrichment across groups ---
+plot_data <- bind_rows(
+  prep_plot_data(pathway_BDSlim),
+  prep_plot_data(pathway_LDSlim)
+) %>%
+  mutate(Pathway = str_trunc(Pathway, 60),
+         Pathway = fct_reorder(Pathway, FoldEnrichment, .fun = max))
+
+# --- Plot ---
+ggplot(plot_data, aes(x = Comparison, y = Pathway)) +
+  geom_point(aes(size = FoldEnrichment, color = logFDR)) +
+  scale_size_continuous(
+    range = c(4, 8),
+    breaks = c(1, 1.5, 2, 2.5, 3, 3.5, 4),
+    name = "Fold Enrichment"
+  ) +
+  scale_color_gradient(
+    low  = "darkblue",
+    high = "red3",
+    name = expression(-log[10](FDR))
+  ) +
+  labs(
+    title = "Enriched GO Biological Process (GO-Slim)",
+    x = NULL,
+    y = NULL
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title         = element_text(size = 14, hjust = 0.5, face = "bold"),
+    axis.text.x        = element_text(size = 10, face = "bold"),
+    axis.text.y        = element_text(size = 10),
+    legend.title       = element_text(size = 10),
+    legend.text        = element_text(size = 10),
+    legend.position    = "right",
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(color = "grey90", linewidth = 0.3),
+    plot.margin        = unit(c(0.5, 1, 0.5, 0.5), "cm")
+  )
+
+
+# Save the plot
+#ggsave("Enriched_GOSlimLD&BD.png", 
+#       width = 9, height = 10, dpi = 300, units = "in")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
